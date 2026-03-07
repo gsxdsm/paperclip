@@ -636,6 +636,21 @@ export function projectService(db: Db) {
       return removed ? toWorkspace(removed) : null;
     },
 
+    /**
+     * Fetches a single workspace by ID without requiring a projectId.
+     *
+     * Used by the workspace-files routes which perform their own authorization
+     * via assertCompanyAccess after loading the workspace's parent project.
+     */
+    getWorkspaceByIdOnly: async (workspaceId: string): Promise<ProjectWorkspace | null> => {
+      const row = await db
+        .select()
+        .from(projectWorkspaces)
+        .where(eq(projectWorkspaces.id, workspaceId))
+        .then((rows) => rows[0] ?? null);
+      return row ? toWorkspace(row) : null;
+    },
+
     resolveByReference: async (companyId: string, reference: string) => {
       const raw = reference.trim();
       if (raw.length === 0) {
