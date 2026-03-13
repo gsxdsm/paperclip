@@ -1,11 +1,11 @@
-import { useEffect, useMemo } from "react";
-import { Link, Navigate, useParams } from "@/lib/router";
+import { useEffect, useMemo, useState } from "react";
+import { Link, Navigate, useLocation, useParams } from "@/lib/router";
 import { useQuery } from "@tanstack/react-query";
 import { useCompany } from "@/context/CompanyContext";
 import { useBreadcrumbs } from "@/context/BreadcrumbContext";
 import { pluginsApi } from "@/api/plugins";
 import { queryKeys } from "@/lib/queryKeys";
-import { PluginSlotMount } from "@/plugins/slots";
+import { PluginSlotMount, ensurePluginContributionLoaded } from "@/plugins/slots";
 import { Button } from "@/components/ui/button";
 import { ArrowLeft } from "lucide-react";
 
@@ -22,6 +22,7 @@ export function PluginPage() {
     companyPrefix?: string;
     pluginId: string;
   }>();
+  const location = useLocation();
   const { companies, selectedCompanyId } = useCompany();
   const { setBreadcrumbs } = useBreadcrumbs();
 
@@ -36,33 +37,45 @@ export function PluginPage() {
     [companies, resolvedCompanyId],
   );
 
-  const { data: contributions } = useQuery({
+  const [pageModuleState, setPageModuleState] = useState<"idle" | "loading" | "loaded" | "error">("idle");
+  const [pageModuleError, setPageModuleError] = useState<string | null>(null);
+
+  const {
+    data: contributions,
+    isLoading: isContributionsLoading,
+    error: contributionsError,
+  } = useQuery({
     queryKey: queryKeys.plugins.uiContributions(resolvedCompanyId ?? undefined),
     queryFn: () => pluginsApi.listUiContributions(resolvedCompanyId ?? undefined),
     enabled: !!resolvedCompanyId && !!pluginId,
   });
 
-  const pageSlot = useMemo(() => {
+  const pageContribution = useMemo(() => {
     if (!pluginId || !contributions) return null;
-    const contribution = contributions.find((c) => c.pluginId === pluginId);
-    if (!contribution) return null;
-    const slot = contribution.slots.find((s) => s.type === "page");
+    return contributions.find((contribution) => contribution.pluginId === pluginId) ?? null;
+  }, [contributions, pluginId]);
+
+  const pageSlot = useMemo(() => {
+    if (!pageContribution) return null;
+    const slot = pageContribution.slots.find((candidate) => candidate.type === "page");
     if (!slot) return null;
     return {
       ...slot,
-      pluginId: contribution.pluginId,
-      pluginKey: contribution.pluginKey,
-      pluginDisplayName: contribution.displayName,
-      pluginVersion: contribution.version,
+      pluginId: pageContribution.pluginId,
+      pluginKey: pageContribution.pluginKey,
+      pluginDisplayName: pageContribution.displayName,
+      pluginVersion: pageContribution.version,
     };
-  }, [pluginId, contributions]);
+  }, [pageContribution]);
 
   const context = useMemo(
     () => ({
       companyId: resolvedCompanyId ?? null,
       companyPrefix,
+      locationSearch: location.search,
+      locationPathname: location.pathname,
     }),
-    [resolvedCompanyId, companyPrefix],
+    [companyPrefix, location.pathname, location.search, resolvedCompanyId],
   );
 
   useEffect(() => {
@@ -74,6 +87,32 @@ export function PluginPage() {
     }
   }, [pageSlot, companyPrefix, setBreadcrumbs]);
 
+  useEffect(() => {
+    if (!pageContribution || !pageSlot) {
+      setPageModuleState("idle");
+      setPageModuleError(null);
+      return;
+    }
+
+    let cancelled = false;
+    setPageModuleState("loading");
+    setPageModuleError(null);
+
+    void ensurePluginContributionLoaded(pageContribution)
+      .then(() => {
+        if (!cancelled) setPageModuleState("loaded");
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        setPageModuleState("error");
+        setPageModuleError(error instanceof Error ? error.message : String(error));
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [pageContribution, pageSlot]);
+
   if (!resolvedCompanyId) {
     return (
       <div className="space-y-4">
@@ -82,14 +121,33 @@ export function PluginPage() {
     );
   }
 
-  if (!contributions) {
+  if (isContributionsLoading) {
     return <div className="text-sm text-muted-foreground">Loading…</div>;
+  }
+
+  if (contributionsError) {
+    return (
+      <div className="text-sm text-destructive">
+        Failed to load plugin page.
+      </div>
+    );
   }
 
   if (!pageSlot) {
     // No page slot: redirect to plugin settings where plugin info is always shown
     const settingsPath = companyPrefix ? `/${companyPrefix}/settings/plugins/${pluginId}` : `/settings/plugins/${pluginId}`;
     return <Navigate to={settingsPath} replace />;
+  }
+
+  if (pageModuleState !== "loaded") {
+    return (
+      <div className="space-y-2">
+        <div className="text-sm text-muted-foreground">Loading…</div>
+        {pageModuleState === "error" && pageModuleError && (
+          <div className="text-xs text-destructive">{pageModuleError}</div>
+        )}
+      </div>
+    );
   }
 
   return (

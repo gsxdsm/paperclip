@@ -392,6 +392,7 @@ export function usePluginStream<T = unknown>(
 ): PluginStreamResult<T> {
   const { pluginId, hostContext } = usePluginBridgeContext();
   const companyId = options?.companyId ?? hostContext.companyId;
+  const normalizedChannel = channel.trim();
 
   const [events, setEvents] = useState<T[]>([]);
   const [lastEvent, setLastEvent] = useState<T | null>(null);
@@ -410,7 +411,14 @@ export function usePluginStream<T = unknown>(
   }, []);
 
   useEffect(() => {
-    if (!companyId) return;
+    if (!companyId || !normalizedChannel) {
+      setEvents([]);
+      setLastEvent(null);
+      setConnecting(false);
+      setConnected(false);
+      setError(null);
+      return;
+    }
 
     closedRef.current = false;
     setEvents([]);
@@ -420,7 +428,7 @@ export function usePluginStream<T = unknown>(
     setError(null);
 
     const url =
-      `/api/plugins/${encodeURIComponent(pluginId)}/bridge/stream/${encodeURIComponent(channel)}` +
+      `/api/plugins/${encodeURIComponent(pluginId)}/bridge/stream/${encodeURIComponent(normalizedChannel)}` +
       `?companyId=${encodeURIComponent(companyId)}`;
 
     const es = new EventSource(url);
@@ -465,7 +473,7 @@ export function usePluginStream<T = unknown>(
       es.close();
       esRef.current = null;
     };
-  }, [pluginId, channel, companyId]);
+  }, [pluginId, normalizedChannel, companyId]);
 
   return { events, lastEvent, connecting, connected, error, close };
 }

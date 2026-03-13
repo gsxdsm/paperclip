@@ -149,6 +149,24 @@ export function resolveRegisteredPluginComponent(
   return registry.get(buildRegistryKey(pluginKey, exportName)) ?? null;
 }
 
+function getDeclaredComponentExportNames(
+  contribution: PluginUiContribution,
+): string[] {
+  const declaredExports = new Set<string>();
+  for (const slot of contribution.slots) {
+    declaredExports.add(slot.exportName);
+  }
+  for (const launcher of contribution.launchers) {
+    if (launcher.exportName) {
+      declaredExports.add(launcher.exportName);
+    }
+    if (isLauncherComponentTarget(launcher)) {
+      declaredExports.add(launcher.action.target);
+    }
+  }
+  return Array.from(declaredExports);
+}
+
 // ---------------------------------------------------------------------------
 // Plugin module dynamic import loader
 // ---------------------------------------------------------------------------
@@ -208,6 +226,163 @@ function buildPluginUiUrl(contribution: PluginUiContribution): string {
  * ordering issues.
  */
 const shimBlobUrls: Record<string, string> = {};
+const pluginLoadErrors = new Map<string, string>();
+
+function getPluginLoadError(moduleKey: string): string | null {
+  return pluginLoadErrors.get(moduleKey) ?? null;
+}
+
+function buildShimSource(
+  specifier: "react" | "react-dom" | "react-dom/client" | "react/jsx-runtime" | "sdk-ui",
+): string {
+  switch (specifier) {
+    case "react":
+      return `
+        const R = globalThis.__paperclipPluginBridge__?.react;
+        export default R;
+        const {
+          Children,
+          Component,
+          Fragment,
+          Profiler,
+          PureComponent,
+          StrictMode,
+          Suspense,
+          cache,
+          cloneElement,
+          createContext,
+          createElement,
+          createRef,
+          forwardRef,
+          isValidElement,
+          lazy,
+          memo,
+          startTransition,
+          use,
+          useActionState,
+          useCallback,
+          useContext,
+          useDebugValue,
+          useDeferredValue,
+          useEffect,
+          useId,
+          useImperativeHandle,
+          useInsertionEffect,
+          useLayoutEffect,
+          useMemo,
+          useOptimistic,
+          useReducer,
+          useRef,
+          useState,
+          useSyncExternalStore,
+          useTransition,
+          version
+        } = R ?? {};
+        export {
+          Children,
+          Component,
+          Fragment,
+          Profiler,
+          PureComponent,
+          StrictMode,
+          Suspense,
+          cache,
+          cloneElement,
+          createContext,
+          createElement,
+          createRef,
+          forwardRef,
+          isValidElement,
+          lazy,
+          memo,
+          startTransition,
+          use,
+          useActionState,
+          useCallback,
+          useContext,
+          useDebugValue,
+          useDeferredValue,
+          useEffect,
+          useId,
+          useImperativeHandle,
+          useInsertionEffect,
+          useLayoutEffect,
+          useMemo,
+          useOptimistic,
+          useReducer,
+          useRef,
+          useState,
+          useSyncExternalStore,
+          useTransition,
+          version
+        };
+      `;
+    case "react/jsx-runtime":
+      return `
+        const R = globalThis.__paperclipPluginBridge__?.react;
+        const withKey = ${applyJsxRuntimeKey.toString()};
+        export const jsx = (type, props, key) => R.createElement(type, withKey(props, key));
+        export const jsxs = (type, props, key) => {
+          const { children, ...rest } = props ?? {};
+          const p = withKey(rest, key);
+          return Array.isArray(children) ? R.createElement(type, p, ...children) : R.createElement(type, p, children);
+        };
+        export const Fragment = R.Fragment;
+      `;
+    case "react-dom":
+    case "react-dom/client":
+      return `
+        const RD = globalThis.__paperclipPluginBridge__?.reactDom;
+        export default RD;
+        const {
+          createPortal,
+          createRoot,
+          flushSync,
+          hydrateRoot,
+          preconnect,
+          prefetchDNS,
+          preinit,
+          preload,
+          preloadModule,
+          preinitModule,
+          requestFormReset,
+          unstable_batchedUpdates,
+          useFormState,
+          useFormStatus,
+          version
+        } = RD ?? {};
+        export {
+          createPortal,
+          createRoot,
+          flushSync,
+          hydrateRoot,
+          preconnect,
+          prefetchDNS,
+          preinit,
+          preload,
+          preloadModule,
+          preinitModule,
+          requestFormReset,
+          unstable_batchedUpdates,
+          useFormState,
+          useFormStatus,
+          version
+        };
+      `;
+    case "sdk-ui":
+      return `
+        const SDK = globalThis.__paperclipPluginBridge__?.sdkUi ?? {};
+        const { usePluginData, usePluginAction, useHostContext, usePluginStream,
+          MetricCard, StatusBadge, DataTable, TimeseriesChart,
+          MarkdownBlock, KeyValueList, ActionBar, LogView, JsonTree,
+          Spinner, ErrorBoundary } = SDK;
+        export { usePluginData, usePluginAction, useHostContext, usePluginStream,
+          MetricCard, StatusBadge, DataTable, TimeseriesChart,
+          MarkdownBlock, KeyValueList, ActionBar, LogView, JsonTree,
+          Spinner, ErrorBoundary };
+      `;
+  }
+}
 
 function applyJsxRuntimeKey(
   props: Record<string, unknown> | null | undefined,
@@ -220,59 +395,7 @@ function applyJsxRuntimeKey(
 function getShimBlobUrl(specifier: "react" | "react-dom" | "react-dom/client" | "react/jsx-runtime" | "sdk-ui"): string {
   if (shimBlobUrls[specifier]) return shimBlobUrls[specifier];
 
-  let source: string;
-  switch (specifier) {
-    case "react":
-      source = `
-        const R = globalThis.__paperclipPluginBridge__?.react;
-        export default R;
-        const { useState, useEffect, useCallback, useMemo, useRef, useContext,
-          createContext, createElement, Fragment, Component, forwardRef,
-          memo, lazy, Suspense, StrictMode, cloneElement, Children,
-          isValidElement, createRef } = R;
-        export { useState, useEffect, useCallback, useMemo, useRef, useContext,
-          createContext, createElement, Fragment, Component, forwardRef,
-          memo, lazy, Suspense, StrictMode, cloneElement, Children,
-          isValidElement, createRef };
-      `;
-      break;
-    case "react/jsx-runtime":
-      source = `
-        const R = globalThis.__paperclipPluginBridge__?.react;
-        const withKey = ${applyJsxRuntimeKey.toString()};
-        export const jsx = (type, props, key) => R.createElement(type, withKey(props, key));
-        export const jsxs = (type, props, key) => {
-          const { children, ...rest } = props ?? {};
-          const p = withKey(rest, key);
-          return Array.isArray(children) ? R.createElement(type, p, ...children) : R.createElement(type, p, children);
-        };
-        export const Fragment = R.Fragment;
-      `;
-      break;
-    case "react-dom":
-    case "react-dom/client":
-      source = `
-        const RD = globalThis.__paperclipPluginBridge__?.reactDom;
-        export default RD;
-        const { createRoot, hydrateRoot, createPortal, flushSync } = RD ?? {};
-        export { createRoot, hydrateRoot, createPortal, flushSync };
-      `;
-      break;
-    case "sdk-ui":
-      source = `
-        const SDK = globalThis.__paperclipPluginBridge__?.sdkUi ?? {};
-        const { usePluginData, usePluginAction, useHostContext, usePluginStream,
-          MetricCard, StatusBadge, DataTable, TimeseriesChart,
-          MarkdownBlock, KeyValueList, ActionBar, LogView, JsonTree,
-          Spinner, ErrorBoundary } = SDK;
-        export { usePluginData, usePluginAction, useHostContext, usePluginStream,
-          MetricCard, StatusBadge, DataTable, TimeseriesChart,
-          MarkdownBlock, KeyValueList, ActionBar, LogView, JsonTree,
-          Spinner, ErrorBoundary };
-      `;
-      break;
-  }
-
+  const source = buildShimSource(specifier);
   const blob = new Blob([source], { type: "application/javascript" });
   const url = URL.createObjectURL(blob);
   shimBlobUrls[specifier] = url;
@@ -402,6 +525,7 @@ async function loadPluginModule(contribution: PluginUiContribution): Promise<voi
   }
 
   pluginLoadStates.set(moduleKey, "loading");
+  pluginLoadErrors.delete(moduleKey);
 
   const url = buildPluginUiUrl(contribution);
 
@@ -413,18 +537,7 @@ async function loadPluginModule(contribution: PluginUiContribution): Promise<voi
 
       // Collect the set of export names declared across all UI contributions so
       // we only register what the manifest advertises (ignore extra exports).
-      const declaredExports = new Set<string>();
-      for (const slot of slots) {
-        declaredExports.add(slot.exportName);
-      }
-      for (const launcher of launchers) {
-        if (launcher.exportName) {
-          declaredExports.add(launcher.exportName);
-        }
-        if (isLauncherComponentTarget(launcher)) {
-          declaredExports.add(launcher.action.target);
-        }
-      }
+      const declaredExports = new Set<string>(getDeclaredComponentExportNames(contribution));
 
       for (const exportName of declaredExports) {
         const exported = mod[exportName];
@@ -455,6 +568,7 @@ async function loadPluginModule(contribution: PluginUiContribution): Promise<voi
       pluginLoadStates.set(moduleKey, "loaded");
     } catch (err) {
       pluginLoadStates.set(moduleKey, "error");
+      pluginLoadErrors.set(moduleKey, getErrorMessage(err));
       console.error(`Failed to load UI module for plugin "${pluginKey}"`, err);
     } finally {
       inflightImports.delete(pluginId);
@@ -487,6 +601,26 @@ export async function ensurePluginContributionLoaded(
   contribution: PluginUiContribution,
 ): Promise<void> {
   await loadPluginModule(contribution);
+
+  const moduleKey = buildPluginModuleKey(contribution);
+  const moduleState = pluginLoadStates.get(moduleKey);
+  if (moduleState === "error") {
+    const cause = getPluginLoadError(moduleKey);
+    throw new Error(
+      cause
+        ? `Failed to load UI module for plugin "${contribution.pluginKey}": ${cause}`
+        : `Failed to load UI module for plugin "${contribution.pluginKey}".`,
+    );
+  }
+
+  const missingExports = getDeclaredComponentExportNames(contribution).filter((exportName) =>
+    !resolveRegisteredPluginComponent(contribution.pluginKey, exportName),
+  );
+  if (missingExports.length > 0) {
+    throw new Error(
+      `Plugin "${contribution.pluginKey}" UI module did not register: ${missingExports.join(", ")}`,
+    );
+  }
 }
 
 /**
@@ -739,6 +873,8 @@ export function PluginSlotMount({
   missingBehavior = "hidden",
 }: PluginSlotMountProps) {
   const [, forceRerender] = useState(0);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const attemptedRecoveryRef = useRef<string | null>(null);
   const component = resolveRegisteredComponent(slot);
 
   useEffect(() => {
@@ -758,11 +894,48 @@ export function PluginSlotMount({
     };
   }, [component, slot.pluginId]);
 
+  useEffect(() => {
+    if (component) {
+      attemptedRecoveryRef.current = null;
+      setLoadError(null);
+      return;
+    }
+    if (inflightImports.get(slot.pluginId)) return;
+    const attemptKey = `${slot.pluginId}:${slot.exportName}`;
+    if (attemptedRecoveryRef.current === attemptKey) return;
+    attemptedRecoveryRef.current = attemptKey;
+
+    let cancelled = false;
+    void (async () => {
+      try {
+        const contributions = await pluginsApi.listUiContributions(context.companyId ?? undefined);
+        const contribution = contributions.find((item) => item.pluginId === slot.pluginId);
+        if (!contribution) {
+          throw new Error(`Plugin contribution not found for "${slot.pluginDisplayName}".`);
+        }
+        await ensurePluginContributionLoaded(contribution);
+        if (!cancelled) {
+          setLoadError(null);
+          forceRerender((tick) => tick + 1);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setLoadError(getErrorMessage(error));
+          forceRerender((tick) => tick + 1);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [component, context.companyId, slot.displayName, slot.exportName, slot.pluginDisplayName, slot.pluginId]);
+
   if (!component) {
     if (missingBehavior === "hidden") return null;
     return (
       <div className={cn("rounded-md border border-dashed border-border px-2 py-1 text-xs text-muted-foreground", className)}>
-        {slot.pluginDisplayName}: {slot.displayName}
+        {loadError ? `${slot.pluginDisplayName}: ${loadError}` : `${slot.pluginDisplayName}: ${slot.displayName}`}
       </div>
     );
   }
@@ -850,6 +1023,7 @@ export function PluginSlotOutlet({
  */
 export function _resetPluginModuleLoader(): void {
   pluginLoadStates.clear();
+  pluginLoadErrors.clear();
   inflightImports.clear();
   registry.clear();
   if (typeof URL.revokeObjectURL === "function") {
@@ -864,3 +1038,4 @@ export function _resetPluginModuleLoader(): void {
 
 export const _applyJsxRuntimeKeyForTests = applyJsxRuntimeKey;
 export const _rewriteBareSpecifiersForTests = rewriteBareSpecifiers;
+export const _buildShimSourceForTests = buildShimSource;

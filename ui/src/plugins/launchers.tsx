@@ -131,6 +131,26 @@ function getErrorMessage(error: unknown): string {
   return "Unknown error";
 }
 
+function resolveLauncherNavigateTarget(
+  target: string,
+  contribution: PluginUiContribution,
+): string {
+  const normalizedTarget = target.startsWith("plugins/")
+    ? `/${target}`
+    : target;
+  const pluginPageByKey = `/plugins/${contribution.pluginKey}`;
+
+  if (normalizedTarget === pluginPageByKey) {
+    return `/plugins/${contribution.pluginId}`;
+  }
+
+  if (normalizedTarget.startsWith(`${pluginPageByKey}/`)) {
+    return `/plugins/${contribution.pluginId}${normalizedTarget.slice(pluginPageByKey.length)}`;
+  }
+
+  return normalizedTarget;
+}
+
 function buildLauncherHostContext(
   context: PluginLauncherContext,
   renderEnvironment: PluginRenderEnvironmentContext | null,
@@ -648,7 +668,7 @@ export function PluginLauncherProvider({ children }: { children: ReactNode }) {
     ) => {
       switch (launcher.action.type) {
         case "navigate":
-          navigate(launcher.action.target);
+          navigate(resolveLauncherNavigateTarget(launcher.action.target, contribution));
           return;
         case "deepLink":
           if (/^https?:\/\//.test(launcher.action.target)) {
