@@ -27,6 +27,13 @@ Path: `packages/plugins/examples/plugin-file-browser-example`
 - An `instanceConfigSchema` setting (`commentAnnotationMode`) lets operators choose which comment extensions are active: `"annotation"`, `"contextMenu"`, `"both"` (default), or `"none"`.
 - Required capabilities: `ui.sidebar.register`, `ui.detailTab.register`, `ui.commentAnnotation.register`, `ui.action.register`, `projects.read`, `project.workspaces.read`, `issue.comments.read`, `plugin.state.read`.
 
+3. `@paperclipai/plugin-llm-chat-example`
+Path: `packages/plugins/examples/plugin-llm-chat-example`
+
+- Demonstrates direct LLM sessions from a plugin worker: provider/model discovery, session continuity across turns, SSE chunk streaming, and explicit session reset/close in a dashboard widget.
+- API notes: registers one `dashboardWidget` slot; the worker exposes `getData` (`llm.providers`) and `performAction` handlers (`llm.chat.send`, `llm.chat.close`).
+- Required capabilities: `ui.dashboardWidget.register`, `llm.providers.list`, `llm.sessions.create`, `llm.sessions.send`, `llm.sessions.close`.
+
 ## Local Install (Dev)
 
 From repo root, build the example package and install it by local path:
